@@ -1,0 +1,31 @@
+strategy_name: tf_pb_ema
+
+timeframe: H1
+
+strategy:
+  ema_fast_period: 20
+  ema_trend_period: 50
+  ema_slow_period: 200
+  atr_period: 14
+  slope_lookback: 24
+  initial_stop_atr_multiplier: 1.2
+  chandelier_lookback: 10
+  chandelier_atr_multiplier: 2.0
+  time_stop_bars: 48
+  atr_min_median_period: 200
+  atr_min_multiplier: 0.8
+
+backtest:
+  timeframe: H1
+  decision_on_close: true
+  execution_next_open: true
+  cooldown_bars: 12
+  time_stop_bars: 48
+  entry_hour_start_utc: 7
+  entry_hour_end_utc: 20
+
+costs:
+  default_spread: 0.3
+  slippage: 0.05
+  commission_per_side: 0.02
+  use_bid_ask_ohlc: false

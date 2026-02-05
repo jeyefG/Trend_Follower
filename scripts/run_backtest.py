@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.backtest.engine import run_backtest
 from src.backtest.metrics import compute_metrics
 from src.data.mt5_client import BarRequest, fetch_mt5_bars, load_csv
-from src.strategy.tf_dc_atr import params_from_dict
+from src.strategy import build_strategy_hooks
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
@@ -93,11 +93,12 @@ def main() -> None:
                 request.end,
             )
             raise RuntimeError(str(exc)) from exc
-    params = params_from_dict(config)
+    hooks = build_strategy_hooks(config)
+    params = hooks.params
 
     run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("artifacts") / args.symbol / run_id
-    trades, equity, summary = run_backtest(bars, params, config, args.symbol, out_dir)
+    trades, equity, summary = run_backtest(bars, params, config, args.symbol, out_dir, strategy_hooks=hooks)
     summary.update(compute_metrics(trades, equity))
 
     with (out_dir / "summary.json").open("w", encoding="utf-8") as fh:
