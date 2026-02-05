@@ -1,0 +1,5 @@
+costs:
+  default_spread: 0.35
+  slippage: 0.08
+  commission_per_side: 0.03
+  use_bid_ask_ohlc: false

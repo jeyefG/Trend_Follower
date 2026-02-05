@@ -1,0 +1,23 @@
+strategy:
+  ema_period: 200
+  slope_lookback: 24
+  slope_atr_multiplier: 0.25
+  atr_period: 14
+  donchian_period: 55
+  atr_min_median_period: 200
+  atr_min_multiplier: 0.70
+
+backtest:
+  timeframe: H1
+  decision_on_close: true
+  execution_next_open: true
+  cooldown_bars: 24
+  time_stop_bars: 120
+  entry_hour_start_utc: 7
+  entry_hour_end_utc: 20
+
+costs:
+  default_spread: 0.3
+  slippage: 0.05
+  commission_per_side: 0.02
+  use_bid_ask_ohlc: false
