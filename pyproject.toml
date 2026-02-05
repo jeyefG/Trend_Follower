@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
   "pandas>=2.0",
   "PyYAML>=6.0",
+  "MetaTrader5>=5.0",
 ]
 
 [tool.pytest.ini_options]

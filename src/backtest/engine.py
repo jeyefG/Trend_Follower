@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -16,7 +18,10 @@ from src.backtest.costs import (
     resolve_spread,
     stop_fill_price,
 )
+from src.data.mt5_client import TIME_BASIS
 from src.strategy.tf_dc_atr import StrategyParams, build_signal_frame
+
+PRICE_BASIS = "MT5_RATES_OHLC"
 
 
 @dataclass
@@ -51,12 +56,56 @@ def _chandelier_stop(side: str, window: pd.DataFrame, atr: float, atr_mult: floa
     return float(window["low"].min() + atr_mult * atr)
 
 
+def _spread_mode(signal_df: pd.DataFrame, model: CostModel) -> str:
+    if "spread" in signal_df.columns:
+        return "column_or_default"
+    if model.default_spread == 0:
+        return "none"
+    return "fixed"
+
+
+def _slippage_mode(model: CostModel) -> str:
+    return "none" if model.slippage == 0 else "fixed_absolute_per_fill"
+
+
+def _validate_bid_ask_columns(signal_df: pd.DataFrame, model: CostModel) -> None:
+    if not model.use_bid_ask_ohlc:
+        return
+    required_cols = {
+        "bid_open",
+        "bid_high",
+        "bid_low",
+        "bid_close",
+        "ask_open",
+        "ask_high",
+        "ask_low",
+        "ask_close",
+    }
+    missing = sorted(required_cols.difference(signal_df.columns))
+    if missing:
+        raise ValueError(
+            "use_bid_ask_ohlc=true requires bid/ask OHLC columns. Missing: "
+            + ", ".join(missing)
+        )
+
+
+def _sample_time_metadata(signal_df: pd.DataFrame) -> Dict[str, str | None]:
+    if signal_df.empty:
+        return {"sample_first_time_utc": None, "sample_last_time_utc": None}
+    first_ts = pd.Timestamp(signal_df["time"].iloc[0]).tz_convert("UTC")
+    last_ts = pd.Timestamp(signal_df["time"].iloc[-1]).tz_convert("UTC")
+    return {
+        "sample_first_time_utc": first_ts.isoformat(),
+        "sample_last_time_utc": last_ts.isoformat(),
+    }
 
 
 def update_trailing_stop(side: str, current_stop: float, chandelier_stop: float) -> float:
     if side == "long":
         return max(current_stop, chandelier_stop)
     return min(current_stop, chandelier_stop)
+
+
 def _stop_triggered(pos: Position, bar: pd.Series) -> bool:
     if pos.side == "long":
         return bar["low"] <= pos.stop_price
@@ -73,11 +122,39 @@ def run_backtest(
     run_dir.mkdir(parents=True, exist_ok=True)
     logger = _setup_logger(run_dir / "run.log")
 
-    with (run_dir / "resolved_config.yaml").open("w", encoding="utf-8") as fh:
-        yaml.safe_dump(config, fh, sort_keys=False)
-
     signal_df = build_signal_frame(bars, strategy_params)
     model = CostModel(**config["costs"])
+    _validate_bid_ask_columns(signal_df, model)
+
+    spread_mode = _spread_mode(signal_df, model)
+    slippage_mode = _slippage_mode(model)
+    sample_times = _sample_time_metadata(signal_df)
+
+    resolved_config = copy.deepcopy(config)
+    resolved_config.setdefault("data_contract", {})
+    resolved_config["data_contract"].update(
+        {
+            "time_basis": TIME_BASIS,
+            "price_basis": PRICE_BASIS,
+            **sample_times,
+            "spread_mode": spread_mode,
+            "spread_units": "price",
+            "spread_default_value": float(model.default_spread),
+            "slippage_mode": slippage_mode,
+            "slippage_units": "price",
+            "slippage_value": float(model.slippage),
+            "fill_model": "ohlc_proxy_with_spread_half_adjustment_and_slippage",
+        }
+    )
+
+    config_hash = hashlib.sha256(
+        json.dumps(resolved_config, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    resolved_config["config_hash"] = config_hash
+
+    with (run_dir / "resolved_config.yaml").open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(resolved_config, fh, sort_keys=False)
+
     bt = config["backtest"]
 
     cooldown_bars = int(bt["cooldown_bars"])
@@ -99,7 +176,6 @@ def run_backtest(
         bar = signal_df.iloc[i]
         next_bar = signal_df.iloc[i + 1]
 
-        # apply pending market exit at next open
         if pending_exit and pos is not None:
             spread = resolve_spread(next_bar, model)
             px = exit_fill_price_market(pos.side, float(next_bar["open"]), spread, model)
@@ -125,7 +201,6 @@ def run_backtest(
             pending_exit = None
             cooldown_remaining = cooldown_bars
 
-        # apply pending entry at next open
         if pending_entry and pos is None and cooldown_remaining == 0:
             spread = resolve_spread(next_bar, model)
             epx = entry_fill_price(pending_entry["side"], float(next_bar["open"]), spread, model)
@@ -145,7 +220,6 @@ def run_backtest(
             logger.info("ENTRY side=%s px=%.5f stop=%.5f", pending_entry["side"], epx, stop)
             pending_entry = None
 
-        # active position management for current bar (intrabar stop)
         if pos is not None:
             pos.bars_in_trade += 1
             if pos.side == "long":
@@ -185,7 +259,6 @@ def run_backtest(
                 if pos.bars_in_trade >= time_stop_bars and pos.mfe_r < 1.0:
                     pending_exit = "time_stop"
 
-        # signal generation at close[t], execute open[t+1]
         if pos is None and pending_entry is None and cooldown_remaining == 0:
             spread_t = resolve_spread(bar, model)
             spread_ok = spread_t <= 0.12 * float(bar["atr14"])
@@ -218,6 +291,18 @@ def run_backtest(
         "symbol": symbol,
         "trades": int(len(trades_df)),
         "net_r": float(trades_df["net_r"].sum()) if len(trades_df) else 0.0,
+        "config_hash": config_hash,
+        "time_basis": TIME_BASIS,
+        "sample_first_time_utc": sample_times["sample_first_time_utc"],
+        "sample_last_time_utc": sample_times["sample_last_time_utc"],
+        "price_basis": PRICE_BASIS,
+        "spread_mode": spread_mode,
+        "spread_units": "price",
+        "spread_default_value": float(model.default_spread),
+        "slippage_mode": slippage_mode,
+        "slippage_units": "price",
+        "slippage_value": float(model.slippage),
+        "fill_model": "ohlc_proxy_with_spread_half_adjustment_and_slippage",
     }
 
     trades_df.to_csv(run_dir / "trades.csv", index=False)
