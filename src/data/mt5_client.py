@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 
 import MetaTrader5 as mt5
 import pandas as pd
@@ -31,6 +32,7 @@ _TIMEFRAME_MAP = {
 }
 
 TIME_BASIS = "UTC_EPOCH_FROM_MT5"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -91,9 +93,37 @@ class MT5Connector:
         fecha_fin: datetime,
     ) -> pd.DataFrame:
         timeframe_value, timeframe_label = _resolve_timeframe(timeframe)
+
+        if not mt5.initialize():
+            raise RuntimeError(f"No se pudo conectar a MetaTrader 5: {mt5.last_error()}")
+
+        if not mt5.symbol_select(symbol, True):
+            raise RuntimeError(f"symbol_select failed: symbol={symbol}, last_error={mt5.last_error()}")
+
         rates = mt5.copy_rates_range(symbol, timeframe_value, fecha_inicio, fecha_fin)
         if rates is None or len(rates) == 0:
-            raise RuntimeError(f"No se pudieron obtener datos {timeframe_label} desde MT5.")
+            last_error = mt5.last_error()
+            terminal_info = mt5.terminal_info() if hasattr(mt5, "terminal_info") else None
+            terminal_connected = getattr(terminal_info, "connected", None) if terminal_info else None
+            terminal_trade_allowed = getattr(terminal_info, "trade_allowed", None) if terminal_info else None
+            symbol_info = mt5.symbol_info(symbol) if hasattr(mt5, "symbol_info") else None
+
+            logger.error(
+                "MT5 copy_rates_range vacío/None. symbol=%s timeframe=%s fecha_inicio=%s fecha_fin=%s "
+                "terminal_connected=%s terminal_trade_allowed=%s symbol_info=%s",
+                symbol,
+                timeframe_label,
+                fecha_inicio,
+                fecha_fin,
+                terminal_connected,
+                terminal_trade_allowed,
+                "None" if symbol_info is None else symbol_info,
+            )
+
+            raise RuntimeError(
+                f"No se pudieron obtener datos {timeframe_label} desde MT5. "
+                f"last_error={last_error}. Verifica símbolo exacto y que esté visible en MarketWatch."
+            )
         df = pd.DataFrame(rates)
         df["time"] = df["time"].apply(_mt5_epoch_to_utc)
         return normalize_bars(df)
