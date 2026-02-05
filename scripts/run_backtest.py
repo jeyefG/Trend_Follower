@@ -7,11 +7,19 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+import sys
+
+# --- ensure project root is on PYTHONPATH ---
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.backtest.engine import run_backtest
 from src.backtest.metrics import compute_metrics
 from src.data.mt5_client import BarRequest, fetch_mt5_bars, load_csv
 from src.strategy.tf_dc_atr import params_from_dict
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def load_config(base_path: Path, symbol: str, symbol_config: Path | None) -> dict:
     with base_path.open("r", encoding="utf-8") as fh:
@@ -42,8 +50,8 @@ def parse_utc(ts: str) -> pd.Timestamp:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", required=True)
-    parser.add_argument("--config", default="configs/strategy_v1.yaml")
-    parser.add_argument("--symbol-config", default=None)
+    parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "strategy_v1.yaml"))
+    parser.add_argument("--symbol-config", default=str(PROJECT_ROOT / "configs" / "symbols" / "XAUUSD.yaml"))
     parser.add_argument("--timeframe", default="H1")
     parser.add_argument("--start", default=None, help="Inicio UTC: 2023-01-01 or 2023-01-01T00:00:00Z")
     parser.add_argument("--end", default=None, help="Fin UTC: 2024-01-01 or 2024-01-01T00:00:00Z")
