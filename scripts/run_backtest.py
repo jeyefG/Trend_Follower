@@ -4,11 +4,12 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 from src.backtest.engine import run_backtest
 from src.backtest.metrics import compute_metrics
-from src.data.mt5_client import load_csv
+from src.data.mt5_client import BarRequest, fetch_mt5_bars, load_csv
 from src.strategy.tf_dc_atr import params_from_dict
 
 
@@ -29,16 +30,39 @@ def load_config(base_path: Path, symbol: str, symbol_config: Path | None) -> dic
     return base
 
 
+def parse_utc(ts: str) -> pd.Timestamp:
+    out = pd.Timestamp(ts)
+    if out.tzinfo is None:
+        out = out.tz_localize("UTC")
+    else:
+        out = out.tz_convert("UTC")
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--config", default="configs/strategy_v1.yaml")
     parser.add_argument("--symbol-config", default=None)
-    parser.add_argument("--data", required=True)
+    parser.add_argument("--timeframe", default="H1")
+    parser.add_argument("--start", default=None, help="Inicio UTC: 2023-01-01 or 2023-01-01T00:00:00Z")
+    parser.add_argument("--end", default=None, help="Fin UTC: 2024-01-01 or 2024-01-01T00:00:00Z")
+    parser.add_argument("--data", default=None, help="CSV opcional como fallback")
     args = parser.parse_args()
 
     config = load_config(Path(args.config), args.symbol, Path(args.symbol_config) if args.symbol_config else None)
-    bars = load_csv(args.data)
+    if args.data:
+        bars = load_csv(args.data)
+    else:
+        if not args.start or not args.end:
+            parser.error("Debe indicar --start y --end para descargar desde MT5 cuando no usa --data.")
+        request = BarRequest(
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            start=parse_utc(args.start),
+            end=parse_utc(args.end),
+        )
+        bars = fetch_mt5_bars(request)
     params = params_from_dict(config)
 
     run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
