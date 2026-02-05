@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -20,6 +21,7 @@ from src.data.mt5_client import BarRequest, fetch_mt5_bars, load_csv
 from src.strategy.tf_dc_atr import params_from_dict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+logger = logging.getLogger(__name__)
 
 def load_config(base_path: Path, symbol: str, symbol_config: Path | None) -> dict:
     with base_path.open("r", encoding="utf-8") as fh:
@@ -58,6 +60,8 @@ def main() -> None:
     parser.add_argument("--data", default=None, help="CSV opcional como fallback")
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+
     config = load_config(Path(args.config), args.symbol, Path(args.symbol_config) if args.symbol_config else None)
     if args.data:
         bars = load_csv(args.data)
@@ -70,7 +74,25 @@ def main() -> None:
             start=parse_utc(args.start),
             end=parse_utc(args.end),
         )
-        bars = fetch_mt5_bars(request)
+        logger.info(
+            "Iniciando descarga MT5: symbol=%s timeframe=%s rango=%s -> %s",
+            request.symbol,
+            request.timeframe,
+            request.start,
+            request.end,
+        )
+        try:
+            bars = fetch_mt5_bars(request)
+        except RuntimeError as exc:
+            logger.error(
+                "Falló la descarga MT5 para symbol=%s timeframe=%s rango=%s -> %s. "
+                "Sugerencia: prueba un rango reciente (últimos 30 días) para validar disponibilidad de histórico.",
+                request.symbol,
+                request.timeframe,
+                request.start,
+                request.end,
+            )
+            raise RuntimeError(str(exc)) from exc
     params = params_from_dict(config)
 
     run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")

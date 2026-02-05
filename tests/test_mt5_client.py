@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 
-def make_fake_mt5(initialize_ok: bool = True, rates=None):
+def make_fake_mt5(initialize_ok: bool = True, rates=None, symbol_select_ok: bool = True):
     if rates is None:
         rates = [
             {
@@ -50,7 +50,7 @@ def make_fake_mt5(initialize_ok: bool = True, rates=None):
     fake.last_error = lambda: (500, "init error")
     fake.copy_rates_range = lambda symbol, tf, start, end: rates
     fake.shutdown = lambda: None
-    fake.symbol_select = lambda symbol, selected: True
+    fake.symbol_select = lambda symbol, selected: symbol_select_ok
     fake.symbol_info_tick = lambda symbol: types.SimpleNamespace(time=1704067200)
     return fake
 
@@ -87,6 +87,29 @@ def test_connector_raises_if_mt5_init_fails():
     with pytest.raises(RuntimeError, match="MetaTrader 5"):
         module.MT5Connector()
 
+
+def test_obtener_ohlcv_raises_if_symbol_select_fails():
+    module = import_mt5_client_with_fake(make_fake_mt5(symbol_select_ok=False))
+    connector = module.MT5Connector()
+    with pytest.raises(RuntimeError, match="symbol_select failed"):
+        connector.obtener_ohlcv(
+            symbol="XAUUSD",
+            timeframe="H1",
+            fecha_inicio=pd.Timestamp("2024-01-01T00:00:00Z").to_pydatetime(),
+            fecha_fin=pd.Timestamp("2024-01-02T00:00:00Z").to_pydatetime(),
+        )
+
+
+def test_obtener_ohlcv_empty_rates_reports_last_error():
+    module = import_mt5_client_with_fake(make_fake_mt5(rates=[]))
+    connector = module.MT5Connector()
+    with pytest.raises(RuntimeError, match="last_error"):
+        connector.obtener_ohlcv(
+            symbol="XAUUSD",
+            timeframe="H1",
+            fecha_inicio=pd.Timestamp("2024-01-01T00:00:00Z").to_pydatetime(),
+            fecha_fin=pd.Timestamp("2024-01-02T00:00:00Z").to_pydatetime(),
+        )
 
 def test_mt5_epoch_is_converted_with_utc_basis():
     module = import_mt5_client_with_fake(make_fake_mt5())
